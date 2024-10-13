@@ -4,10 +4,15 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 
+// Constants for the infinite map
+const CHUNK_SIZE = 500; // Size of each chunk in pixels
+let chunks = {}; // Store generated chunks
+let terrain = []; // Store terrain features like trees
+
 // Game Objects
 const player = {
-    x: canvas.width / 2,
-    y: canvas.height / 2,
+    x: 0,
+    y: 0,
     size: 15,
     speed: 5,
     health: 100,
@@ -34,6 +39,10 @@ const expElement = document.getElementById('exp');
 // Event Listeners for Key Presses
 document.addEventListener('keydown', (e) => {
     keys[e.key] = true;
+    // Prevent default scrolling behavior
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        e.preventDefault();
+    }
 });
 
 document.addEventListener('keyup', (e) => {
@@ -59,9 +68,8 @@ function update() {
     if (keys['ArrowLeft'] || keys['a']) player.x -= player.speed;
     if (keys['ArrowRight'] || keys['d']) player.x += player.speed;
 
-    // Keep Player within Canvas Bounds
-    player.x = Math.max(0, Math.min(canvas.width, player.x));
-    player.y = Math.max(0, Math.min(canvas.height, player.y));
+    // Generate chunks around the player
+    generateChunksAroundPlayer();
 
     // Update Weapons
     player.weapons.forEach((weapon) => weapon.update());
@@ -76,36 +84,37 @@ function update() {
         }
     });
 
-    // Spawn Enemies at Intervals
-    if (Math.random() < 0.02) {
-        spawnEnemy();
-    }
+    const activeRadius = CHUNK_SIZE * 1.5;
 
     // Update Enemies
     enemies.forEach((enemy, eIndex) => {
-        enemy.update();
+        if (isWithinDistance(enemy, player, activeRadius)) {
+            enemy.update();
 
-        // Check Collision with Player
-        if (detectCollision(player, enemy)) {
-            player.health -= enemy.attackStrength;
-            healthElement.textContent = `Health: ${player.health}`;
-            enemies.splice(eIndex, 1);
-            if (player.health <= 0) {
-                player.health = 0;
+            // Check Collision with Player
+            if (detectCollision(player, enemy)) {
+                player.health -= enemy.attackStrength;
                 healthElement.textContent = `Health: ${player.health}`;
+                enemies.splice(eIndex, 1);
+                if (player.health <= 0) {
+                    player.health = 0;
+                    healthElement.textContent = `Health: ${player.health}`;
+                }
             }
         }
     });
 
     // Update Jewels
     jewels.forEach((jewel, jIndex) => {
-        // Move Jewel towards Player if close
-        jewel.update();
+        if (isWithinDistance(jewel, player, activeRadius)) {
+            // Move Jewel towards Player if close
+            jewel.update();
 
-        // Check collision with player
-        if (detectCollision(player, jewel)) {
-            jewel.collect();
-            jewels.splice(jIndex, 1);
+            // Check collision with player
+            if (detectCollision(player, jewel)) {
+                jewel.collect();
+                jewels.splice(jIndex, 1);
+            }
         }
     });
 
@@ -121,59 +130,147 @@ function draw() {
     // Clear Canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Draw Player
-    ctx.fillStyle = 'white';
-    ctx.beginPath();
-    ctx.arc(player.x, player.y, player.size, 0, Math.PI * 2);
-    ctx.fill();
+    // Calculate camera offset to center the player
+    const offsetX = canvas.width / 2 - player.x;
+    const offsetY = canvas.height / 2 - player.y;
 
-    // Draw Bullets
-    bullets.forEach((bullet) => {
-        bullet.draw();
-    });
+    // Draw Background
+    drawBackground(offsetX, offsetY);
 
-    // Draw Enemies
-    enemies.forEach((enemy) => {
-        enemy.draw();
+    // Draw Terrain
+    terrain.forEach((feature) => {
+        feature.draw(offsetX, offsetY);
     });
 
     // Draw Jewels
     jewels.forEach((jewel) => {
-        jewel.draw();
+        jewel.draw(offsetX, offsetY);
     });
+
+    // Draw Enemies
+    enemies.forEach((enemy) => {
+        enemy.draw(offsetX, offsetY);
+    });
+
+    // Draw Bullets
+    bullets.forEach((bullet) => {
+        bullet.draw(offsetX, offsetY);
+    });
+
+    // Draw Player at the center of the canvas
+    ctx.fillStyle = 'white';
+    ctx.beginPath();
+    ctx.arc(canvas.width / 2, canvas.height / 2, player.size, 0, Math.PI * 2);
+    ctx.fill();
 }
 
 // Helper Functions
 
-function spawnEnemy() {
-    const size = 20;
-    const speed = 1 + Math.random() * 0.5;
-    const health = 5 + Math.floor(Math.random() * 5);
-    const attackStrength = 10;
-    let x, y;
+function getChunkCoord(x, y) {
+    return {
+        x: Math.floor(x / CHUNK_SIZE),
+        y: Math.floor(y / CHUNK_SIZE),
+    };
+}
 
-    // Spawn enemies at random edges
-    const edge = Math.floor(Math.random() * 4);
-    switch (edge) {
-        case 0: // Top
-            x = Math.random() * canvas.width;
-            y = -size;
-            break;
-        case 1: // Right
-            x = canvas.width + size;
-            y = Math.random() * canvas.height;
-            break;
-        case 2: // Bottom
-            x = Math.random() * canvas.width;
-            y = canvas.height + size;
-            break;
-        case 3: // Left
-            x = -size;
-            y = Math.random() * canvas.height;
-            break;
+function generateChunksAroundPlayer() {
+    const chunkCoords = getChunkCoord(player.x, player.y);
+    const renderDistance = 1; // How many chunks around the player to generate
+
+    const activeChunks = {};
+
+    for (let dx = -renderDistance; dx <= renderDistance; dx++) {
+        for (let dy = -renderDistance; dy <= renderDistance; dy++) {
+            const chunkX = chunkCoords.x + dx;
+            const chunkY = chunkCoords.y + dy;
+            const chunkKey = `${chunkX},${chunkY}`;
+
+            if (!chunks[chunkKey]) {
+                generateChunk(chunkX, chunkY);
+            }
+            activeChunks[chunkKey] = true;
+        }
     }
 
-    enemies.push(new Enemy(x, y, size, speed, health, attackStrength));
+    // Unload chunks that are no longer active
+    for (const chunkKey in chunks) {
+        if (!activeChunks[chunkKey]) {
+            unloadChunk(chunkKey);
+        }
+    }
+}
+
+function generateChunk(chunkX, chunkY) {
+    const chunk = {
+        enemies: [],
+        items: [],
+        terrain: [],
+    };
+
+    const chunkSeed = chunkX * 100000 + chunkY;
+
+    // Generate enemies
+    const enemyCount = 5; // Adjust as needed
+    for (let i = 0; i < enemyCount; i++) {
+        const x = chunkX * CHUNK_SIZE + Math.random() * CHUNK_SIZE;
+        const y = chunkY * CHUNK_SIZE + Math.random() * CHUNK_SIZE;
+        const enemy = new Enemy(x, y, 20, 1 + Math.random() * 0.5, 5, 10);
+        chunk.enemies.push(enemy);
+        enemies.push(enemy); // Add to the main enemies array
+    }
+
+    // Generate items (jewels)
+    const itemCount = 3; // Adjust as needed
+    for (let i = 0; i < itemCount; i++) {
+        const x = chunkX * CHUNK_SIZE + Math.random() * CHUNK_SIZE;
+        const y = chunkY * CHUNK_SIZE + Math.random() * CHUNK_SIZE;
+        const jewel = new Jewel(x, y);
+        chunk.items.push(jewel);
+        jewels.push(jewel); // Add to the main jewels array
+    }
+
+    // Generate terrain features (e.g., trees)
+    for (let x = 0; x < CHUNK_SIZE; x += 50) {
+        for (let y = 0; y < CHUNK_SIZE; y += 50) {
+            const worldX = chunkX * CHUNK_SIZE + x;
+            const worldY = chunkY * CHUNK_SIZE + y;
+            if ((worldX + worldY) % 200 === 0) {
+                const tree = new Tree(worldX, worldY);
+                chunk.terrain.push(tree);
+                terrain.push(tree); // Add to the main terrain array
+            }
+        }
+    }
+
+    // Store the chunk
+    const chunkKey = `${chunkX},${chunkY}`;
+    chunks[chunkKey] = chunk;
+}
+
+function unloadChunk(chunkKey) {
+    const chunk = chunks[chunkKey];
+    if (chunk) {
+        // Remove enemies
+        chunk.enemies.forEach((enemy) => {
+            const index = enemies.indexOf(enemy);
+            if (index !== -1) enemies.splice(index, 1);
+        });
+
+        // Remove items
+        chunk.items.forEach((item) => {
+            const index = jewels.indexOf(item);
+            if (index !== -1) jewels.splice(index, 1);
+        });
+
+        // Remove terrain features
+        chunk.terrain.forEach((feature) => {
+            const index = terrain.indexOf(feature);
+            if (index !== -1) terrain.splice(index, 1);
+        });
+
+        // Remove the chunk
+        delete chunks[chunkKey];
+    }
 }
 
 function detectCollision(obj1, obj2) {
@@ -184,9 +281,15 @@ function detectCollision(obj1, obj2) {
     return distance < obj1.size + obj2.size;
 }
 
+function isWithinDistance(obj1, obj2, distance) {
+    const dx = obj1.x - obj2.x;
+    const dy = obj1.y - obj2.y;
+    return dx * dx + dy * dy <= distance * distance;
+}
+
 function resetGame() {
-    player.x = canvas.width / 2;
-    player.y = canvas.height / 2;
+    player.x = 0;
+    player.y = 0;
     player.health = player.maxHealth;
     player.level = 1;
     player.exp = 0;
@@ -196,6 +299,8 @@ function resetGame() {
     bullets = [];
     enemies = [];
     jewels = [];
+    terrain = [];
+    chunks = {};
     score = 0;
 
     // Update HUD
@@ -209,6 +314,29 @@ function gameOver() {
     alert('Game Over!');
     resetGame();
     gameLoop();
+}
+
+function drawBackground(offsetX, offsetY) {
+    const gridSize = 50; // Size of each grid cell
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+
+    const startX = -offsetX % gridSize;
+    const startY = -offsetY % gridSize;
+
+    for (let x = startX; x < canvas.width; x += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvas.height);
+        ctx.stroke();
+    }
+
+    for (let y = startY; y < canvas.height; y += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+    }
 }
 
 // Classes
@@ -268,7 +396,7 @@ class Bullet {
         this.y += Math.sin(this.angle) * this.speed;
 
         // Check collision with enemies
-        enemies.forEach((enemy, eIndex) => {
+        enemies.forEach((enemy) => {
             if (detectCollision(this, enemy)) {
                 enemy.takeDamage(this.damage);
                 this.used = true;
@@ -276,20 +404,16 @@ class Bullet {
         });
     }
 
-    draw() {
+    draw(offsetX, offsetY) {
         ctx.fillStyle = 'yellow';
         ctx.beginPath();
-        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.arc(this.x + offsetX, this.y + offsetY, this.size, 0, Math.PI * 2);
         ctx.fill();
     }
 
     outOfBounds() {
-        return (
-            this.x < 0 ||
-            this.x > canvas.width ||
-            this.y < 0 ||
-            this.y > canvas.height
-        );
+        const maxDistance = 1000; // Max distance bullet can travel from player
+        return !isWithinDistance(this, player, maxDistance);
     }
 }
 
@@ -316,19 +440,24 @@ class Enemy {
         }
     }
 
-    draw() {
+    draw(offsetX, offsetY) {
         ctx.fillStyle = 'red';
         ctx.beginPath();
-        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.arc(this.x + offsetX, this.y + offsetY, this.size, 0, Math.PI * 2);
         ctx.fill();
 
         // Draw Health Bar
         ctx.fillStyle = 'black';
-        ctx.fillRect(this.x - this.size, this.y - this.size - 10, this.size * 2, 5);
+        ctx.fillRect(
+            this.x - this.size + offsetX,
+            this.y - this.size - 10 + offsetY,
+            this.size * 2,
+            5
+        );
         ctx.fillStyle = 'green';
         ctx.fillRect(
-            this.x - this.size,
-            this.y - this.size - 10,
+            this.x - this.size + offsetX,
+            this.y - this.size - 10 + offsetY,
             (this.size * 2) * (this.health / this.maxHealth),
             5
         );
@@ -342,7 +471,8 @@ class Enemy {
         // Drop a jewel
         jewels.push(new Jewel(this.x, this.y));
         score += 10;
-        enemies.splice(enemies.indexOf(this), 1);
+        const index = enemies.indexOf(this);
+        if (index !== -1) enemies.splice(index, 1);
     }
 }
 
@@ -364,10 +494,10 @@ class Jewel {
         }
     }
 
-    draw() {
+    draw(offsetX, offsetY) {
         ctx.fillStyle = 'blue';
         ctx.beginPath();
-        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.arc(this.x + offsetX, this.y + offsetY, this.size, 0, Math.PI * 2);
         ctx.fill();
     }
 
@@ -386,9 +516,54 @@ class Jewel {
             player.health = player.maxHealth; // Restore health on level up
             player.speed += 0.5; // Increase speed
             // Optionally, add new weapons or increase stats
+            // For example, add a new weapon at certain levels
+            if (player.level === 3) {
+                player.weapons.push(new ShotgunWeapon());
+            }
         }
     }
 }
 
+class Tree {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.size = 20;
+    }
+
+    draw(offsetX, offsetY) {
+        ctx.fillStyle = 'green';
+        ctx.beginPath();
+        ctx.arc(this.x + offsetX, this.y + offsetY, this.size, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+// Additional Weapons (Optional)
+
+class ShotgunWeapon extends Weapon {
+    constructor() {
+        super();
+        this.attackSpeed = 2000;
+    }
+
+    fire() {
+        const spread = 0.2;
+        for (let i = -2; i <= 2; i++) {
+            bullets.push(
+                new Bullet(
+                    player.x,
+                    player.y,
+                    5,
+                    7,
+                    Math.random() * Math.PI * 2 + spread * i,
+                    8 // Damage
+                )
+            );
+        }
+    }
+}
+
+// Start the game
 resetGame();
 gameLoop();
